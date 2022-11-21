@@ -17,7 +17,6 @@ func TestStartWorker(t *testing.T) {
 
 		time.Sleep(1 * time.Second)
 		assert.Equal(t, defaultWorkersCount, int(pool.workersAlive.Load()))
-		assert.Equal(t, defaultWorkersCount, len(pool.workers))
 
 		cancel()
 		time.Sleep(2 * time.Second)
@@ -34,7 +33,6 @@ func TestAddWorkers(t *testing.T) {
 		time.Sleep(1 * time.Second)
 
 		assert.Equal(t, defaultWorkersCount+3, int(pool.workersAlive.Load()))
-		assert.Equal(t, defaultWorkersCount+3, len(pool.workers))
 
 		cancel()
 		time.Sleep(3 * time.Second)
@@ -52,7 +50,6 @@ func TestRemoveWorkers(t *testing.T) {
 
 		defer func() {
 			assert.Equal(t, 0, int(pool.workersAlive.Load()))
-			assert.Equal(t, 0, len(pool.workers))
 			cancel()
 		}()
 	})
@@ -72,26 +69,33 @@ func TestDoSomeJob(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		pool := NewPool()
 		go pool.Start(ctx)
-		time.Sleep(2 * time.Second)
 
 		pool.AddJob(jobSuccess)
 		pool.AddJob(jobFail)
 
 		resCount := 0
 	loop:
-		for _, w := range pool.workers {
+		pool.workers.Range(func(id, w any) bool {
+			worker, ok := w.(Worker)
+			if !ok {
+				return false
+			}
+
 			select {
-			case res := <-w.jobResult:
+			case res := <-worker.jobResult:
 				log.Printf("job %s, error '%v' \n", res.JobID, res.Err)
 				resCount++
-				if resCount == expectedResultsCount {
-					cancel()
-					return
-				}
 			default:
-				continue
+				return false
 			}
+			return true
+		})
+
+		if resCount == expectedResultsCount {
+			cancel()
+			return
 		}
+
 		goto loop
 	})
 }

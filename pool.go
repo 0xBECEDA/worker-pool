@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
-	"github.com/antigloss/go/container/concurrent/queue"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/antigloss/go/container/concurrent/queue"
 )
 
 type Job interface {
@@ -29,7 +31,7 @@ type WorkerPool interface {
 type Pool struct {
 	tasks        *queue.LockfreeQueue[Job]
 	workersAlive *atomic.Int64
-	workers      map[int64]Worker
+	workers      *sync.Map
 }
 
 type Worker struct {
@@ -62,7 +64,7 @@ func (t *Task) Do() error {
 func NewPool() *Pool {
 	return &Pool{
 		tasks:        queue.NewLockfreeQueue[Job](),
-		workers:      make(map[int64]Worker),
+		workers:      &sync.Map{},
 		workersAlive: &atomic.Int64{},
 	}
 }
@@ -110,26 +112,31 @@ func (p *Pool) AddWorkers(count int) {
 			quit:      make(chan bool),
 			jobResult: p.Subscribe(),
 		}
-		p.workers[w.id] = w
+		p.workers.Store(w.id, w)
 
 		go w.RunWorker()
 	}
 }
 
 func (p *Pool) RemoveWorkers(count int) {
-	for id, worker := range p.workers {
-		alive := p.workersAlive.Load()
+	p.workers.Range(func(id, w any) bool {
+		worker, ok := w.(Worker)
+		if !ok {
+			return false
+		}
 
+		alive := p.workersAlive.Load()
 		if count <= 0 {
-			return
+			return true
 		}
 		worker.quit <- true
 
-		delete(p.workers, id)
+		p.workers.Delete(id)
 		p.workersAlive.Store(alive - 1)
 
 		count--
-	}
+		return true
+	})
 }
 
 func (p *Pool) AddJob(job Job) {
